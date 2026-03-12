@@ -1796,7 +1796,7 @@ const SEED = [
   { name:'Erstes 9K Training ⚡',              date:'2026-07-01', color:TRAIN_COLOR },
   { name:'Erstes 10K Training 🎯',             date:'2026-08-01', color:TRAIN_COLOR },
   { name:'Tapering-Woche beginnt 😴',          date:'2026-09-13', color:TRAIN_COLOR },
-  { name:'Lauf-Outfit & Ausrüstung bereit 👟', date:'2026-09-18', color:TRAIN_COLOR },
+  { name:'Outfit & Ausrüstung bereit 👟', date:'2026-09-18', color:TRAIN_COLOR },
 ];
 // Seed: add any missing canonical milestone (by name), don't touch user-added ones
 const existingNames = new Set(events.map(e => e.name));
@@ -1813,6 +1813,11 @@ if(!categories[TRAIN_COLOR]) { categories[TRAIN_COLOR] = 'Training';       seede
 // Ensure race event is pinned
 const raceEvt = events.find(e => e.name === 'Erbelauf 2026 🏆');
 if(raceEvt && !raceEvt.pinned){ raceEvt.pinned = true; seeded = true; }
+// Remove retired milestones
+const retired = ['Lauf-Outfit & Ausrüstung bereit 👟','Lauf-Outfit & Ausrüstung bereit ✓'];
+const beforeRetire = events.length;
+events.splice(0, events.length, ...events.filter(e => !retired.includes(e.name)));
+if(events.length !== beforeRetire) seeded = true;
 if(seeded){ save(events); saveCategories(); }
 
 buildColorFilterChips(); render();
