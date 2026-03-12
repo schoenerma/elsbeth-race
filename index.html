@@ -1132,9 +1132,9 @@ function doSearch(e){
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const PALETTE = ['#c9603a','#4a8fa8','#6a9e5b','#8a6bbf','#c4913a'];
-const STORE_KEY = 'countdown_events_v1';
-const CAT_KEY   = 'timeline_categories_v1';
-const OPT_KEY   = 'timeline_options_v1';
+const STORE_KEY = 'elsbeth_erbelauf_events_v1';
+const CAT_KEY   = 'elsbeth_erbelauf_categories_v1';
+const OPT_KEY   = 'elsbeth_erbelauf_options_v1';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
@@ -1796,9 +1796,9 @@ function exportICS(){
 
 // ── Sync ──────────────────────────────────────────────────────────────────────
 const SYNC_WORKER  = 'https://mytimelinesync.tripletwist-ofm-b48.workers.dev';
-const SYNC_KEY     = 'mt_sync';      // { binId, rememberPw }
-const SYNC_PW_KEY  = 'mt_sync_pw';  // stored only if user opts in
-const TOMBSTONE_KEY = 'mt_tombstones'; // { id: deletedAt }
+const SYNC_KEY     = 'elsbeth_erbelauf_sync';
+const SYNC_PW_KEY  = 'elsbeth_erbelauf_sync_pw';
+const TOMBSTONE_KEY = 'elsbeth_erbelauf_tombstones';
 
 // ── Crypto helpers (Web Crypto API — no libraries) ────────────────────────────
 async function deriveKey(password, saltHex) {
@@ -2171,46 +2171,60 @@ document.addEventListener('keydown', e=>{
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadOptions(); loadCategories(); updateDate(); checkForSharedData(); initSyncUI();
 
-// ── Migrate milestone names and dates ────────────────────────────────────
-let migrated = false;
-const toRemove = new Set();
-events.forEach(e => {
-  if(e.name === 'Erbelauf 2026 – Virtueller 10K Lauf') { e.name = 'Erbelauf 2026'; e.updatedAt = Date.now(); migrated = true; }
-  if(e.name === 'Anmeldung für den virtuellen Lauf')    { toRemove.add(e.id); migrated = true; }
-  if(e.name === 'Erstes 6K Training abgeschlossen')     { toRemove.add(e.id); migrated = true; }
-  if(e.name === 'Erstes 6K Training')                   { toRemove.add(e.id); migrated = true; }
-  if(e.name === 'Erstes 7,5K Training abgeschlossen')   { e.name = 'Erstes 7,5K Training'; e.date = '2026-06-01'; e.updatedAt = Date.now(); migrated = true; }
-  if(e.name === 'Erstes 9K Training abgeschlossen')     { e.name = 'Erstes 9K Training'; e.updatedAt = Date.now(); migrated = true; }
-  if(e.name === 'Erster Lauf des Trainingsplans 🏃' && e.date === '2026-04-01') { e.date = '2026-03-15'; e.updatedAt = Date.now(); migrated = true; }
+// ── Seed / reset to canonical milestones ─────────────────────────────────
+const CANONICAL_NAMES = new Set([
+  'Erbelauf 2026 🏆',
+  'Erster Trainingslauf 🏃',
+  'Erstes 6K Training 💪',
+  'Erstes 7,5K Training 🔥',
+  'Erstes 9K Training ⚡',
+  'Erstes 10K Training 🎯',
+  'Tapering-Woche beginnt 😴',
+  'Lauf-Outfit & Ausrüstung bereit 👟',
+]);
+const raceColor  = '#c9603a';
+const trainColor = '#4a8fa8';
+const SEED = [
+  { name:'Erbelauf 2026 🏆',                     date:'2026-09-20', color:raceColor,  pinned:true },
+  { name:'Erster Trainingslauf 🏃',              date:'2026-03-15', color:trainColor },
+  { name:'Erstes 6K Training 💪',                date:'2026-04-24', color:trainColor },
+  { name:'Erstes 7,5K Training 🔥',              date:'2026-06-01', color:trainColor },
+  { name:'Erstes 9K Training ⚡',                date:'2026-07-01', color:trainColor },
+  { name:'Erstes 10K Training 🎯',               date:'2026-08-01', color:trainColor },
+  { name:'Tapering-Woche beginnt 😴',            date:'2026-09-13', color:trainColor },
+  { name:'Lauf-Outfit & Ausrüstung bereit 👟',   date:'2026-09-18', color:trainColor },
+];
+// Add any seed event that isn't already present (by name)
+const existingNames = new Set(events.map(e => e.name));
+let seeded = false;
+SEED.forEach(s => {
+  if(!existingNames.has(s.name)){
+    events.push({ id:uid(), name:s.name, date:s.date, time:null, tz:null, recur:null, color:s.color, pinned:!!s.pinned, created:Date.now(), updatedAt:Date.now() });
+    seeded = true;
+  }
 });
-if(toRemove.size) { events.splice(0, events.length, ...events.filter(e => !toRemove.has(e.id))); migrated = true; }
-// Add 10K training if missing
-if(!events.find(e => e.name === 'Erstes 10K Training')) {
-  events.push({ id:uid(), name:'Erstes 10K Training', date:'2026-08-01', time:null, tz:null, recur:null, color:'#4a8fa8', created:Date.now(), updatedAt:Date.now() });
-  migrated = true;
-}
-if(migrated) save(events);
-const raceEventExisting = events.find(e => e.date === '2026-09-20' && e.color === '#c9603a');
-if(raceEventExisting && !raceEventExisting.pinned){ raceEventExisting.pinned = true; raceEventExisting.updatedAt = Date.now(); save(events); }
-
-// ── Pre-seed for Elsbeth if first load ────────────────────────────────────
-if(!events.length){
-  const raceColor = '#c9603a';
-  const trainColor = '#4a8fa8';
-  const seeds = [
-    { name:'Erbelauf 2026', date:'2026-09-20', color:raceColor, pinned:true },
-    { name:'Erster Lauf des Trainingsplans 🏃', date:'2026-03-15', color:trainColor },
-    { name:'Erstes 7,5K Training', date:'2026-06-01', color:trainColor },
-    { name:'Erstes 9K Training', date:'2026-07-01', color:trainColor },
-    { name:'Erstes 10K Training', date:'2026-08-01', color:trainColor },
-    { name:'Tapering-Woche beginnt', date:'2026-09-13', color:trainColor },
-    { name:'Lauf-Outfit & Ausrüstung bereit ✓', date:'2026-09-18', color:trainColor },
-  ];
-  seeds.forEach(s => events.push({ id:uid(), name:s.name, date:s.date, time:null, tz:null, recur:null, color:s.color, pinned:!!s.pinned, created:Date.now(), updatedAt:Date.now() }));
-  categories[raceColor] = 'Erbelauf 2026';
-  categories[trainColor] = 'Training';
-  save(events); saveCategories();
-}
+// Remove any stale events that aren't canonical and weren't added by the user
+const staleNames = [
+  'Erbelauf 2026 – Virtueller 10K Lauf','Erbelauf 2026',
+  'Anmeldung für den virtuellen Lauf',
+  'Erstes 6K Training abgeschlossen','Erstes 6K Training',
+  'Erstes 7,5K Training abgeschlossen','Erstes 7,5K Training',
+  'Erstes 9K Training abgeschlossen','Erstes 9K Training',
+  'Erstes 10K Training',
+  'Erster Lauf des Trainingsplans 🏃','Erster Trainingslauf 🏃',
+  'Tapering-Woche beginnt',
+  'Lauf-Outfit & Ausrüstung bereit ✓',
+];
+const before = events.length;
+events.splice(0, events.length, ...events.filter(e => !staleNames.includes(e.name)));
+if(events.length !== before) seeded = true;
+// Ensure race event is pinned
+const raceEvt = events.find(e => e.name === 'Erbelauf 2026 🏆');
+if(raceEvt && !raceEvt.pinned){ raceEvt.pinned = true; seeded = true; }
+// Ensure categories exist
+categories[raceColor]  = categories[raceColor]  || 'Erbelauf 2026';
+categories[trainColor] = categories[trainColor] || 'Training';
+if(seeded){ save(events); saveCategories(); }
 
 buildColorFilterChips(); render();
 events.filter(e=>parseTarget(e)>Date.now()).forEach(e=>wasActive.add(e.id));
