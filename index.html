@@ -733,28 +733,6 @@ body.dark .sync-warn { background: #2a2310; border-color: #6a5010; color: #c8a84
     <button class="opt-export-btn" onclick="exportICS()">📅 Export to Calendar (.ics)</button>
     <p class="export-note">Snapshot export — not a live sync.</p>
   </div>
-  <div class="opt-section" id="sync-section">
-    <h3>Sync</h3>
-    <div id="sync-ui-setup">
-      <p class="sync-note">Sync your timeline across devices using a Sync ID and password. <strong>Keep both safe — they cannot be recovered if lost.</strong></p>
-      <button class="opt-export-btn" onclick="openSyncSetup()">☁ Set up sync</button>
-      <p class="sync-note" style="margin-top:6px">Already have a Sync ID? <a href="#" class="sync-link" onclick="openSyncConnect(event)">Connect this device</a></p>
-    </div>
-    <div id="sync-ui-active" style="display:none">
-      <div class="sync-id-row">
-        <span class="opt-label" style="font-size:0.75rem">SYNC ID</span>
-        <span id="sync-id-display" class="sync-id-val"></span>
-        <button class="sync-copy-id" onclick="copySyncId()" title="Copy Sync ID">⧉</button>
-      </div>
-      <div class="opt-row" style="margin-top:8px">
-        <span class="opt-label">Remember password</span>
-        <label class="toggle"><input type="checkbox" id="opt-rememberpw" onchange="toggleRememberPw()"><div class="toggle-track"></div></label>
-      </div>
-      <button class="opt-export-btn sync-now-btn" id="sync-now-btn" onclick="syncNow()">☁ Sync now</button>
-      <p class="sync-status" id="sync-status"></p>
-      <p class="sync-note" style="margin-top:8px"><a href="#" class="sync-link sync-danger" onclick="disconnectSync(event)">Disconnect sync on this device</a></p>
-    </div>
-  </div>
 </div>
 
 <div class="search-wrap">
@@ -1133,8 +1111,8 @@ function doSearch(e){
 // ── Constants ─────────────────────────────────────────────────────────────────
 const PALETTE = ['#c9603a','#4a8fa8','#6a9e5b','#8a6bbf','#c4913a'];
 const STORE_KEY = 'elsbeth_erbelauf_events_v1';
-const CAT_KEY   = 'elsbeth_erbelauf_categories_v1';
-const OPT_KEY   = 'elsbeth_erbelauf_options_v1';
+const CAT_KEY   = 'elsbeth_erbelauf_cats_v1';
+const OPT_KEY   = 'elsbeth_erbelauf_opts_v1';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
@@ -1794,407 +1772,33 @@ function exportICS(){
 }
 
 
-// ── Sync ──────────────────────────────────────────────────────────────────────
-const SYNC_WORKER  = 'https://mytimelinesync.tripletwist-ofm-b48.workers.dev';
-const SYNC_KEY     = 'elsbeth_erbelauf_sync';
-const SYNC_PW_KEY  = 'elsbeth_erbelauf_sync_pw';
-const TOMBSTONE_KEY = 'elsbeth_erbelauf_tombstones';
-
-// ── Crypto helpers (Web Crypto API — no libraries) ────────────────────────────
-async function deriveKey(password, saltHex) {
-  const enc  = new TextEncoder();
-  const salt = hexToBytes(saltHex);
-  const raw  = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' },
-    raw,
-    { name: 'AES-GCM', length: 256 },
-    false, ['encrypt', 'decrypt']
-  );
-}
-
-async function encryptData(plaintext, password) {
-  const saltBytes = crypto.getRandomValues(new Uint8Array(16));
-  const saltHex   = bytesToHex(saltBytes);
-  const key       = await deriveKey(password, saltHex);
-  const iv        = crypto.getRandomValues(new Uint8Array(12));
-  const enc       = new TextEncoder();
-  const cipher    = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
-  return {
-    iv:   bytesToB64(iv),
-    data: saltHex + ':' + bytesToB64(new Uint8Array(cipher)),
-    v:    1
-  };
-}
-
-async function decryptData(blob, password) {
-  const sep = blob.data.indexOf(':');
-  if(sep === -1) throw new Error('Invalid encrypted data format');
-  const saltHex   = blob.data.slice(0, sep);
-  const cipherB64 = blob.data.slice(sep + 1);
-  const key    = await deriveKey(password, saltHex);
-  const iv     = b64ToBytes(blob.iv);
-  const cipher = b64ToBytes(cipherB64);
-  const plain  = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipher);
-  return new TextDecoder().decode(plain);
-}
-
-function bytesToHex(b) { return Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join(''); }
-function hexToBytes(h) { const a=new Uint8Array(h.length/2); for(let i=0;i<a.length;i++) a[i]=parseInt(h.slice(i*2,i*2+2),16); return a; }
-function bytesToB64(b) { let s=''; for(let i=0;i<b.length;i++) s+=String.fromCharCode(b[i]); return btoa(s); }
-function b64ToBytes(s) { return Uint8Array.from(atob(s), c=>c.charCodeAt(0)); }
-
-// ── Tombstones ────────────────────────────────────────────────────────────────
-function loadTombstones(){ try{ return JSON.parse(localStorage.getItem(TOMBSTONE_KEY)||'{}'); }catch{ return {}; } }
-function saveTombstones(t){ localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(t)); }
-function addTombstone(id){ const t=loadTombstones(); t[id]=Date.now(); saveTombstones(t); }
-
-// ── Sync state helpers ────────────────────────────────────────────────────────
-function loadSyncState(){ try{ return JSON.parse(localStorage.getItem(SYNC_KEY)||'null'); }catch{ return null; } }
-function saveSyncState(s){ localStorage.setItem(SYNC_KEY, JSON.stringify(s)); }
-function loadSyncPw(){ return localStorage.getItem(SYNC_PW_KEY)||''; }
-function saveSyncPw(pw){ localStorage.setItem(SYNC_PW_KEY, pw); }
-function clearSyncPw(){ localStorage.removeItem(SYNC_PW_KEY); }
-
-function initSyncUI(){
-  const state = loadSyncState();
-  document.getElementById('sync-ui-setup').style.display  = state ? 'none'  : '';
-  document.getElementById('sync-ui-active').style.display = state ? ''      : 'none';
-  if(state){
-    document.getElementById('sync-id-display').textContent = state.binId;
-    document.getElementById('opt-rememberpw').checked = !!state.rememberPw;
-  }
-}
-
-function setSyncStatus(msg, type=''){
-  const el = document.getElementById('sync-status');
-  if(!el) return;
-  el.textContent = msg;
-  el.className = 'sync-status' + (type ? ' '+type : '');
-}
-
-// ── Core sync: merge local + remote ──────────────────────────────────────────
-async function performSync(binId, password){
-  setSyncStatus('⠋ Syncing…');
-  document.getElementById('sync-now-btn').disabled = true;
-
-  try {
-    // 1. Fetch remote
-    const resp = await fetch(`${SYNC_WORKER}/read/${binId}`);
-    let remoteEvents = [], remoteTombstones = {};
-
-    if(resp.ok){
-      const blob = await resp.json();
-      try {
-        const plain = await decryptData(blob, password);
-        const parsed = JSON.parse(plain);
-        remoteEvents     = parsed.events     || [];
-        remoteTombstones = parsed.tombstones || {};
-      } catch {
-        setSyncStatus('Wrong password or corrupted data.', 'error');
-        document.getElementById('sync-now-btn').disabled = false;
-        return false;
-      }
-    } else if(resp.status !== 404){
-      setSyncStatus('Could not reach sync server.', 'error');
-      document.getElementById('sync-now-btn').disabled = false;
-      return false;
-    }
-
-    // 2. Merge
-    const localTombstones = loadTombstones();
-    const allTombstones   = { ...remoteTombstones, ...localTombstones };
-
-    // Build map of all events keyed by id, keeping newer updatedAt
-    const merged = new Map();
-    [...remoteEvents, ...events].forEach(e => {
-      // Skip if tombstoned
-      if(allTombstones[e.id]) return;
-      const existing = merged.get(e.id);
-      const eTime = e.updatedAt || e.created || 0;
-      const xTime = existing ? (existing.updatedAt || existing.created || 0) : -1;
-      if(!existing || eTime > xTime) merged.set(e.id, e);
-    });
-
-    const mergedEvents = Array.from(merged.values());
-
-    // Prune tombstones older than 90 days
-    const ninetyDaysAgo = Date.now() - 90 * 86400000;
-    Object.keys(allTombstones).forEach(id => { if(allTombstones[id] < ninetyDaysAgo) delete allTombstones[id]; });
-
-    // 3. Push merged state back to cloud
-    const payload = JSON.stringify({ events: mergedEvents, tombstones: allTombstones });
-    const encrypted = await encryptData(payload, password);
-
-    const pushResp = await fetch(`${SYNC_WORKER}/update/${binId}`, {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(encrypted),
-    });
-
-    if(!pushResp.ok){
-      setSyncStatus('Sync failed — could not save.', 'error');
-      document.getElementById('sync-now-btn').disabled = false;
-      return false;
-    }
-
-    // 4. Apply merged events locally
-    events.length = 0;
-    mergedEvents.forEach(e => events.push(e));
-    saveTombstones(allTombstones);
-    save(events);
-    buildColorFilterChips();
-    render();
-
-    const now = new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-    setSyncStatus(`Last synced at ${now}`, 'ok');
-    document.getElementById('sync-now-btn').disabled = false;
-    return true;
-
-  } catch(e) {
-    setSyncStatus('Sync error — check connection.', 'error');
-    document.getElementById('sync-now-btn').disabled = false;
-    return false;
-  }
-}
-
-// ── Setup flow ────────────────────────────────────────────────────────────────
-function openSyncSetup(){
-  document.getElementById('setup-pw').value  = '';
-  document.getElementById('setup-pw2').value = '';
-  document.getElementById('setup-err').textContent = '';
-  document.getElementById('sync-setup-overlay').classList.add('open');
-  document.getElementById('options-panel').classList.remove('open');
-  document.getElementById('gear-btn').classList.remove('open');
-  setTimeout(()=>document.getElementById('setup-pw').focus(), 100);
-}
-function closeSyncSetup(){ document.getElementById('sync-setup-overlay').classList.remove('open'); }
-
-async function submitSyncSetup(){
-  const pw  = document.getElementById('setup-pw').value;
-  const pw2 = document.getElementById('setup-pw2').value;
-  const errEl = document.getElementById('setup-err');
-  if(pw.length < 8){ errEl.textContent = 'Password must be at least 8 characters.'; return; }
-  if(pw !== pw2)   { errEl.textContent = 'Passwords do not match.'; return; }
-
-  const btn = document.getElementById('setup-submit');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="sync-spinner"></span>Creating…';
-
-  try {
-    // Encrypt current milestones + empty tombstones
-    const payload   = JSON.stringify({ events, tombstones: loadTombstones() });
-    const encrypted = await encryptData(payload, pw);
-
-    const resp = await fetch(`${SYNC_WORKER}/create`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(encrypted),
-    });
-
-    if(!resp.ok){
-      let msg = 'Could not create sync — check connection.';
-      try { const e = await resp.json(); if(e.error) msg = e.error; } catch {}
-      errEl.textContent = msg;
-      btn.disabled = false; btn.innerHTML = 'Create sync';
-      return;
-    }
-    const { binId } = await resp.json();
-
-    // Save state
-    saveSyncState({ binId, rememberPw: true });
-    saveSyncPw(pw);
-    closeSyncSetup();
-    initSyncUI();
-    setSyncStatus('Sync set up successfully ✓', 'ok');
-
-  } catch {
-    errEl.textContent = 'Could not create sync — check connection.';
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = 'Create sync';
-  }
-}
-
-// ── Connect flow ──────────────────────────────────────────────────────────────
-function openSyncConnect(e){ e.preventDefault();
-  document.getElementById('connect-id').value = '';
-  document.getElementById('connect-pw').value = '';
-  document.getElementById('connect-err').textContent = '';
-  document.getElementById('sync-connect-overlay').classList.add('open');
-  document.getElementById('options-panel').classList.remove('open');
-  document.getElementById('gear-btn').classList.remove('open');
-  setTimeout(()=>document.getElementById('connect-id').focus(), 100);
-}
-function closeSyncConnect(){ document.getElementById('sync-connect-overlay').classList.remove('open'); }
-
-async function submitSyncConnect(){
-  const binId = document.getElementById('connect-id').value.trim();
-  const pw    = document.getElementById('connect-pw').value;
-  const errEl = document.getElementById('connect-err');
-  if(!/^[a-f0-9]{24}$/i.test(binId)){ errEl.textContent = 'Sync ID must be a 24-character code.'; return; }
-  if(!pw){ errEl.textContent = 'Please enter your password.'; return; }
-
-  const btn = document.getElementById('connect-submit');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="sync-spinner"></span>Connecting…';
-
-  try {
-    // Try to read + decrypt — verifies both ID and password
-    const resp = await fetch(`${SYNC_WORKER}/read/${binId}`);
-    if(resp.status === 404){ errEl.textContent = 'Sync ID not found.'; btn.disabled=false; btn.innerHTML='Connect & sync'; return; }
-    if(!resp.ok) throw new Error();
-    const blob = await resp.json();
-    let parsed;
-    try { parsed = JSON.parse(await decryptData(blob, pw)); }
-    catch { errEl.textContent = 'Incorrect password.'; btn.disabled=false; btn.innerHTML='Connect & sync'; return; }
-
-    // Merge remote into local
-    saveSyncState({ binId, rememberPw: true });
-    saveSyncPw(pw);
-    closeSyncConnect();
-    initSyncUI();
-
-    // Full merge sync
-    await performSync(binId, pw);
-
-  } catch {
-    errEl.textContent = 'Could not connect — check your connection.';
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = 'Connect & sync';
-  }
-}
-
-// ── Sync now button ───────────────────────────────────────────────────────────
-// Inline password prompt (replaces browser prompt() which blocks the tab)
-function showSyncPwPrompt(callback){
-  const existing = document.getElementById('sync-pw-prompt-overlay');
-  if(existing) existing.remove();
-  const overlay = document.createElement('div');
-  overlay.id = 'sync-pw-prompt-overlay';
-  overlay.className = 'modal-overlay';
-  overlay.innerHTML = `<div class="modal" style="max-width:340px">
-    <h2 style="font-size:1.2rem;margin-bottom:16px">Enter sync password</h2>
-    <div class="sync-field">
-      <div class="sync-pw-wrap">
-        <input type="password" id="sync-pw-prompt-input" placeholder="Your sync password" autocomplete="current-password">
-      </div>
-    </div>
-    <div class="modal-btns">
-      <button class="btn-cancel" id="spp-cancel">Cancel</button>
-      <button class="btn-save" id="spp-confirm">Confirm</button>
-    </div>
-  </div>`;
-  const inp = () => document.getElementById('sync-pw-prompt-input');
-  const confirm = () => { const pw=inp().value; overlay.remove(); callback(pw); };
-  const cancel  = () => overlay.remove();
-  overlay.addEventListener('click', e => { if(e.target===overlay) cancel(); });
-  document.body.appendChild(overlay);
-  overlay.querySelector('#spp-cancel').addEventListener('click', cancel);
-  overlay.querySelector('#spp-confirm').addEventListener('click', confirm);
-  overlay.querySelector('#sync-pw-prompt-input').addEventListener('keydown', e => {
-    if(e.key==='Enter') confirm();
-    if(e.key==='Escape') cancel();
-  });
-  requestAnimationFrame(()=>{ overlay.classList.add('open'); inp().focus(); });
-}
-
-async function syncNow(){
-  const state = loadSyncState();
-  if(!state) return;
-  let pw = loadSyncPw();
-  if(!pw){
-    showSyncPwPrompt(async (pw2) => {
-      if(!pw2) return;
-      if(state.rememberPw) saveSyncPw(pw2);
-      await performSync(state.binId, pw2);
-    });
-    return;
-  }
-  await performSync(state.binId, pw);
-}
-
-// ── UI helpers ────────────────────────────────────────────────────────────────
-function toggleRememberPw(){
-  const state = loadSyncState();
-  if(!state) return;
-  const remember = document.getElementById('opt-rememberpw').checked;
-  state.rememberPw = remember;
-  saveSyncState(state);
-  if(remember){
-    showSyncPwPrompt((pw) => { if(pw) saveSyncPw(pw); });
-  } else {
-    clearSyncPw();
-  }
-}
-
-function copySyncId(){
-  const state = loadSyncState();
-  if(!state) return;
-  navigator.clipboard.writeText(state.binId).then(()=>{
-    const btn = document.querySelector('.sync-copy-id');
-    if(btn){ btn.textContent='✓'; setTimeout(()=>btn.textContent='⧉', 1500); }
-  });
-}
-
-function disconnectSync(e){ e.preventDefault();
-  if(!confirm('Disconnect sync on this device? Your cloud data will not be deleted.')) return;
-  localStorage.removeItem(SYNC_KEY);
-  clearSyncPw();
-  initSyncUI();
-  setSyncStatus('');
-}
-
-function togglePwVis(inputId, btn){
-  const inp = document.getElementById(inputId);
-  const show = inp.type === 'password';
-  inp.type = show ? 'text' : 'password';
-  btn.textContent = show ? 'Hide' : 'Show';
-}
-
-// _commitDelete: records tombstone then runs core logic
-function _commitDelete(id){
-  addTombstone(id);
-  _commitDeleteCore(id);
-}
 
 // ── Date display ──────────────────────────────────────────────────────────────
 function updateDate(){ document.getElementById('current-date').textContent=new Date().toLocaleDateString('de-DE',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); }
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 document.addEventListener('keydown', e=>{
-  if(e.key==='Escape'){ closeModal(); document.getElementById('help-overlay').classList.remove('open'); document.getElementById('share-overlay').classList.remove('open'); closeSyncSetup(); closeSyncConnect(); const pp=document.getElementById('sync-pw-prompt-overlay'); if(pp) pp.remove(); }
+  if(e.key==='Escape'){ closeModal(); document.getElementById('help-overlay').classList.remove('open'); document.getElementById('share-overlay').classList.remove('open'); }
   if(e.key==='Enter'&&document.getElementById('modal-overlay').classList.contains('open')) saveEvent();
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-loadOptions(); loadCategories(); updateDate(); checkForSharedData(); initSyncUI();
+loadOptions(); loadCategories(); updateDate(); checkForSharedData();
 
-// ── Seed / reset to canonical milestones ─────────────────────────────────
-const CANONICAL_NAMES = new Set([
-  'Erbelauf 2026 🏆',
-  'Erster Trainingslauf 🏃',
-  'Erstes 6K Training 💪',
-  'Erstes 7,5K Training 🔥',
-  'Erstes 9K Training ⚡',
-  'Erstes 10K Training 🎯',
-  'Tapering-Woche beginnt 😴',
-  'Lauf-Outfit & Ausrüstung bereit 👟',
-]);
-const raceColor  = '#c9603a';
-const trainColor = '#4a8fa8';
+// ── Seed canonical milestones ─────────────────────────────────────────────
+const RACE_COLOR  = '#c9603a';
+const TRAIN_COLOR = '#4a8fa8';
 const SEED = [
-  { name:'Erbelauf 2026 🏆',                     date:'2026-09-20', color:raceColor,  pinned:true },
-  { name:'Erster Trainingslauf 🏃',              date:'2026-03-15', color:trainColor },
-  { name:'Erstes 6K Training 💪',                date:'2026-04-24', color:trainColor },
-  { name:'Erstes 7,5K Training 🔥',              date:'2026-06-01', color:trainColor },
-  { name:'Erstes 9K Training ⚡',                date:'2026-07-01', color:trainColor },
-  { name:'Erstes 10K Training 🎯',               date:'2026-08-01', color:trainColor },
-  { name:'Tapering-Woche beginnt 😴',            date:'2026-09-13', color:trainColor },
-  { name:'Lauf-Outfit & Ausrüstung bereit 👟',   date:'2026-09-18', color:trainColor },
+  { name:'Erbelauf 2026 🏆',                   date:'2026-09-20', color:RACE_COLOR,  pinned:true  },
+  { name:'Erster Trainingslauf 🏃',            date:'2026-03-15', color:TRAIN_COLOR },
+  { name:'Erstes 6K Training 💪',              date:'2026-04-24', color:TRAIN_COLOR },
+  { name:'Erstes 7,5K Training 🔥',            date:'2026-06-01', color:TRAIN_COLOR },
+  { name:'Erstes 9K Training ⚡',              date:'2026-07-01', color:TRAIN_COLOR },
+  { name:'Erstes 10K Training 🎯',             date:'2026-08-01', color:TRAIN_COLOR },
+  { name:'Tapering-Woche beginnt 😴',          date:'2026-09-13', color:TRAIN_COLOR },
+  { name:'Lauf-Outfit & Ausrüstung bereit 👟', date:'2026-09-18', color:TRAIN_COLOR },
 ];
-// Add any seed event that isn't already present (by name)
+// Seed: add any missing canonical milestone (by name), don't touch user-added ones
 const existingNames = new Set(events.map(e => e.name));
 let seeded = false;
 SEED.forEach(s => {
@@ -2203,27 +1807,12 @@ SEED.forEach(s => {
     seeded = true;
   }
 });
-// Remove any stale events that aren't canonical and weren't added by the user
-const staleNames = [
-  'Erbelauf 2026 – Virtueller 10K Lauf','Erbelauf 2026',
-  'Anmeldung für den virtuellen Lauf',
-  'Erstes 6K Training abgeschlossen','Erstes 6K Training',
-  'Erstes 7,5K Training abgeschlossen','Erstes 7,5K Training',
-  'Erstes 9K Training abgeschlossen','Erstes 9K Training',
-  'Erstes 10K Training',
-  'Erster Lauf des Trainingsplans 🏃','Erster Trainingslauf 🏃',
-  'Tapering-Woche beginnt',
-  'Lauf-Outfit & Ausrüstung bereit ✓',
-];
-const before = events.length;
-events.splice(0, events.length, ...events.filter(e => !staleNames.includes(e.name)));
-if(events.length !== before) seeded = true;
+// Ensure categories exist
+if(!categories[RACE_COLOR])  { categories[RACE_COLOR]  = 'Erbelauf 2026'; seeded = true; }
+if(!categories[TRAIN_COLOR]) { categories[TRAIN_COLOR] = 'Training';       seeded = true; }
 // Ensure race event is pinned
 const raceEvt = events.find(e => e.name === 'Erbelauf 2026 🏆');
 if(raceEvt && !raceEvt.pinned){ raceEvt.pinned = true; seeded = true; }
-// Ensure categories exist
-categories[raceColor]  = categories[raceColor]  || 'Erbelauf 2026';
-categories[trainColor] = categories[trainColor] || 'Training';
 if(seeded){ save(events); saveCategories(); }
 
 buildColorFilterChips(); render();
@@ -2231,57 +1820,6 @@ events.filter(e=>parseTarget(e)>Date.now()).forEach(e=>wasActive.add(e.id));
 setTimeout(()=>document.getElementById('search-input').focus(), 50);
 setInterval(tick, 100); setInterval(updateDate, 60000);
 </script>
-<!-- Sync Setup Modal -->
-<div class="modal-overlay" id="sync-setup-overlay" onclick="if(event.target===this)closeSyncSetup()">
-  <div class="modal">
-    <h2>Set up sync</h2>
-    <div class="sync-warn">⚠ Important: Your Sync ID and password are the only way to access your data on another device. There is no recovery option if you forget them. Please save them somewhere safe.</div>
-    <div class="sync-field">
-      <label>Choose a password</label>
-      <div class="sync-pw-wrap">
-        <input type="password" id="setup-pw" placeholder="At least 8 characters" autocomplete="new-password">
-        <button class="sync-pw-toggle" onclick="togglePwVis('setup-pw',this)" type="button">Show</button>
-      </div>
-    </div>
-    <div class="sync-field">
-      <label>Confirm password</label>
-      <div class="sync-pw-wrap">
-        <input type="password" id="setup-pw2" placeholder="Repeat password" autocomplete="new-password">
-        <button class="sync-pw-toggle" onclick="togglePwVis('setup-pw2',this)" type="button">Show</button>
-      </div>
-    </div>
-    <p class="sync-status error" id="setup-err" style="margin-bottom:10px;min-height:1em"></p>
-    <div class="modal-btns">
-      <button class="btn-cancel" onclick="closeSyncSetup()">Cancel</button>
-      <button class="btn-save" id="setup-submit" onclick="submitSyncSetup()">Create sync</button>
-    </div>
-  </div>
-</div>
-
-<!-- Sync Connect Modal -->
-<div class="modal-overlay" id="sync-connect-overlay" onclick="if(event.target===this)closeSyncConnect()">
-  <div class="modal">
-    <h2>Connect device</h2>
-    <p class="sync-note" style="margin-bottom:14px">Enter your Sync ID and password to connect this device to an existing timeline.</p>
-    <div class="sync-field">
-      <label>Sync ID</label>
-      <input type="text" id="connect-id" placeholder="24-character Sync ID" autocomplete="off" spellcheck="false">
-    </div>
-    <div class="sync-field">
-      <label>Password</label>
-      <div class="sync-pw-wrap">
-        <input type="password" id="connect-pw" placeholder="Your sync password" autocomplete="current-password">
-        <button class="sync-pw-toggle" onclick="togglePwVis('connect-pw',this)" type="button">Show</button>
-      </div>
-    </div>
-    <p class="sync-status error" id="connect-err" style="margin-bottom:10px;min-height:1em"></p>
-    <div class="modal-btns">
-      <button class="btn-cancel" onclick="closeSyncConnect()">Cancel</button>
-      <button class="btn-save" id="connect-submit" onclick="submitSyncConnect()">Connect &amp; sync</button>
-    </div>
-  </div>
-</div>
-
 
 </body>
 </html>
